@@ -1,50 +1,60 @@
 import numpy as np
+import faiss
 
-class SimulatedANNIndex:
-    """A simulated ANN index that uses brute-force search."""
+class FAISSIndex:
+    """A FAISS-based ANN index."""
     def __init__(self, vector_dim):
         self.vector_dim = vector_dim
-        self.vectors = {}
-        self.is_trained = True # No training needed for this simple index
+        # Using IndexFlatL2 for brute-force L2 distance search
+        self.base_index = faiss.IndexFlatL2(vector_dim)
+        # Using IndexIDMap to map vectors to custom IDs
+        self.index = faiss.IndexIDMap(self.base_index)
+        self.is_trained = True  # No training needed for IndexFlatL2
 
     @property
     def ntotal(self):
-        return len(self.vectors)
+        return self.index.ntotal
 
     def train(self, data):
-        # No training needed for a brute-force index
-        print("Skipping training for simulated index.")
+        # No training needed for IndexFlatL2
+        print("Skipping training for FAISS index.")
         pass
 
     def add_with_ids(self, vectors, ids):
-        for i, vector_id in enumerate(ids):
-            self.vectors[vector_id] = vectors[i]
+        # Ensure ids are in the correct format (int64)
+        ids = np.array(ids, dtype=np.int64)
+        self.index.add_with_ids(vectors, ids)
+
+    def _get_internal_id(self, vector_id):
+        """Get the internal FAISS ID for a given custom vector ID."""
+        id_map_np = np.array(self.index.id_map)
+        if id_map_np.ndim == 0:
+            if id_map_np == vector_id:
+                return 0
+        else:
+            for i, custom_id in enumerate(id_map_np):
+                if custom_id == vector_id:
+                    return i
+        return -1
 
     def remove(self, vector_id):
-        if vector_id in self.vectors:
-            del self.vectors[vector_id]
+        # FAISS requires a list of IDs to remove
+        self.index.remove_ids(np.array([vector_id], dtype=np.int64))
 
     def reconstruct(self, vector_id):
-        return self.vectors.get(vector_id)
+        internal_id = self._get_internal_id(vector_id)
+        if internal_id != -1:
+            return self.base_index.reconstruct(internal_id)
+        return None
 
     def search(self, query_vector, k):
-        if not self.vectors:
+        if self.ntotal == 0:
             return np.array([[]]), np.array([[]])
+        
+        # Search the index
+        distances, ids = self.index.search(query_vector, k)
+        return distances, ids
 
-        ids = list(self.vectors.keys())
-        vectors = np.array(list(self.vectors.values()))
-        
-        # Calculate L2 distance
-        distances = np.linalg.norm(vectors - query_vector, axis=1)
-        
-        # Get top k results
-        sorted_indices = np.argsort(distances)
-        top_k_indices = sorted_indices[:k]
-        
-        top_distances = distances[top_k_indices]
-        top_ids = np.array(ids)[top_k_indices]
-        
-        return np.array([top_distances]), np.array([top_ids])
 
 
 class ShardingPolicy:
@@ -55,7 +65,7 @@ class ShardingPolicy:
 
     def create_shard(self, namespace):
         if namespace not in self.shards:
-            self.shards[namespace] = SimulatedANNIndex(self.vector_dim)
+            self.shards[namespace] = FAISSIndex(self.vector_dim)
             self.id_map[namespace] = set()
 
     def train(self, namespace, data):

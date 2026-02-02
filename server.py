@@ -1,65 +1,46 @@
-from workload import Workload
-from sharding_policy import ShardingPolicy
-import numpy as np
-
-def main():
-    # Initialize workload and sharding policy
-    workload = Workload(num_operations=1000, num_vectors=1000, vector_dim=128, num_namespaces=10)
-    sharding_policy = ShardingPolicy(vector_dim=128)
-
-    # Generate workload
-    operations = workload.generate_workload()
-
-    # Collect training data
-    training_data = {}
-    for op in operations:
-        if op['type'] == 'insert':
-            namespace = op['namespace']
-            if namespace not in training_data:
-                training_data[namespace] = []
-            training_data[namespace].append(op['vector'])
-
-    # Create and train indexes
-    for namespace, data in training_data.items():
-        if data:
-            sharding_policy.create_shard(namespace)
-            sharding_policy.train(namespace, np.array(data))
+# server.py
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Protocol
 
 
-    # Process operations
-    insert_count = 0
-    delete_count = 0
-    search_count = 0
-
-    for op in operations:
-        if op['type'] == 'insert':
-            sharding_policy.insert(op['vector_id'], op['vector'], op['namespace'])
-            insert_count += 1
-        elif op['type'] == 'delete':
-            sharding_policy.delete(op['vector_id'], op['namespace'])
-            delete_count += 1
-        elif op['type'] == 'search':
-            sharding_policy.search(op['query_vector'], op['k'], op['namespace'])
-            search_count += 1
-
-    # Print statistics
-    print(f"Simulation complete.")
-    print(f"Total operations: {len(operations)}")
-    print(f"Inserts: {insert_count}")
-    print(f"Deletes: {delete_count}")
-    print(f"Searches: {search_count}")
-
-    for namespace, shard in sharding_policy.shards.items():
-        print(f"Namespace {namespace} size: {shard.ntotal}")
-
-    # Demonstrate merge and split
-    sharding_policy.merge(0, 1, 10)
-    sharding_policy.split(2, 11, 12)
-
-    print("\nAfter merge and split:")
-    for namespace, shard in sharding_policy.shards.items():
-        print(f"Namespace {namespace} size: {shard.ntotal}")
+@dataclass
+class Server:
+    sid: int
+    capacity: float
+    heat: float = 0.0
+    cumulative_work: float = 0.0
+    window_work: float = 0.0
 
 
-if __name__ == "__main__":
-    main()
+class ServerModel(Protocol):
+    def process(self, server: Server, work: float) -> float:
+        """Return latency contribution from this server for this work."""
+        ...
+
+    def tick(self, server: Server) -> None:
+        """Per-timestep update (e.g., heat decay)."""
+        ...
+
+
+class SimpleHeatModel:
+    """
+    Minimal model:
+      latency = work * (1 + alpha * heat)
+      heat += beta * work
+      heat *= (1 - decay) each tick
+    """
+    def __init__(self, alpha: float = 0.0005, beta: float = 0.01, decay: float = 0.02):
+        self.alpha = alpha
+        self.beta = beta
+        self.decay = decay
+
+    def process(self, server: Server, work: float) -> float:
+        latency = work * (1.0 + self.alpha * server.heat)
+        server.heat += self.beta * work
+        server.cumulative_work += work
+        server.window_work += work
+        return latency
+
+    def tick(self, server: Server) -> None:
+        server.heat *= (1.0 - self.decay)

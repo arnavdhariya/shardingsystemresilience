@@ -209,4 +209,5 @@ __marimo__/
 *.csv
 *.png
 *.pdf
+*.jsonl
 

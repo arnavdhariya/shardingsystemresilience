@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.idea/
+results/
+plots/
+plots_paper_2000/
+plots_per_request/
+*.csv
+*.jsonl
+*.zip
+.mplconfig/
